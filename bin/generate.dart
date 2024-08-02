@@ -153,9 +153,11 @@ void generateFile(List<FileSystemEntity> files, Directory outputPath,
   switch (options.format) {
     case 'json':
       await _writeJson(classBuilder, files);
+      classBuilder.writeln('}');
       break;
     case 'keys':
       await _writeKeys(classBuilder, files, options.skipUnnecessaryKeys);
+      classBuilder.writeln();
       break;
     // case 'csv':
     //   await _writeCsv(classBuilder, files);
@@ -164,7 +166,6 @@ void generateFile(List<FileSystemEntity> files, Directory outputPath,
       stderr.writeln('Format not supported');
   }
 
-  classBuilder.writeln('}');
   generatedFile.writeAsStringSync(classBuilder.toString());
 
   stdout.writeln('All done! File generated in ${outputPath.path}');
@@ -175,7 +176,7 @@ Future _writeKeys(StringBuffer classBuilder, List<FileSystemEntity> files,
   var file = '''
 // DO NOT EDIT. This is code generated via package:easy_localization/generate.dart
 
-abstract class  LocaleKeys {
+abstract class LocaleKeys {
 ''';
 
   final fileData = File(files.first.path);
@@ -183,12 +184,20 @@ abstract class  LocaleKeys {
   Map<String, dynamic> translations =
       json.decode(await fileData.readAsString());
 
-  file += _resolve(translations, skipUnnecessaryKeys);
+  final classes = <String>{};
 
+  file += _resolve(translations, skipUnnecessaryKeys, classes);
+
+  file += '}\n\n';
+
+  for (var classDefinition in classes) {
+    file += classDefinition;
+  }
   classBuilder.writeln(file);
 }
 
 String _resolve(Map<String, dynamic> translations, bool? skipUnnecessaryKeys,
+    Set<String> classes,
     [String? accKey]) {
   var fileContent = '';
 
@@ -202,7 +211,6 @@ String _resolve(Map<String, dynamic> translations, bool? skipUnnecessaryKeys,
   for (var key in sortedKeys) {
     var ignoreKey = false;
     if (translations[key] is Map) {
-      // If key does not contain keys for plural(), gender() etc. and option is enabled -> ignore it
       ignoreKey = !containsPreservedKeywords(
               translations[key] as Map<String, dynamic>) &&
           canIgnoreKeys;
@@ -212,11 +220,12 @@ String _resolve(Map<String, dynamic> translations, bool? skipUnnecessaryKeys,
         nextAccKey = '$accKey.$key';
       }
 
+      final className = _toClassName(nextAccKey);
       fileContent +=
-          _resolve(translations[key], skipUnnecessaryKeys, nextAccKey);
-    }
-
-    if (!_preservedKeywords.contains(key)) {
+          '  static _${className}Keys get $key => _${className}Keys();\n';
+      classes.add(_createClass(translations[key] as Map<String, dynamic>,
+          className, classes, nextAccKey, skipUnnecessaryKeys));
+    } else if (!_preservedKeywords.contains(key)) {
       accKey != null && !ignoreKey
           ? fileContent +=
               '  static const ${accKey.replaceAll('.', '_')}_$key = \'$accKey.$key\';\n'
@@ -227,6 +236,35 @@ String _resolve(Map<String, dynamic> translations, bool? skipUnnecessaryKeys,
   }
 
   return fileContent;
+}
+
+String _createClass(Map<String, dynamic> translations, String className,
+    Set<String> classes, String accKey, bool? skipUnnecessaryKeys) {
+  var classContent = 'class _${className}Keys {\n';
+
+  for (var key in translations.keys) {
+    if (translations[key] is Map) {
+      var nextAccKey = '$accKey.$key';
+      final nestedClassName = _toClassName(nextAccKey);
+      classContent +=
+          '  _${nestedClassName}Keys get $key => _${nestedClassName}Keys();\n';
+      classes.add(_createClass(translations[key] as Map<String, dynamic>,
+          nestedClassName, classes, nextAccKey, skipUnnecessaryKeys));
+    } else if (!_preservedKeywords.contains(key)) {
+      classContent += '  String get $key => \'$accKey.$key\';\n';
+    }
+  }
+
+  classContent += '}\n\n';
+  return classContent;
+}
+
+String _toClassName(String key) {
+  return key
+      .split('.')
+      .map((e) => e[0].toUpperCase() + e.substring(1))
+      .join()
+      .replaceAll('_', '');
 }
 
 Future _writeJson(
